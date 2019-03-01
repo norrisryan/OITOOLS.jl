@@ -37,6 +37,11 @@ mutable struct OIdata
   indx_t3_1::Array{Int64,1}
   indx_t3_2::Array{Int64,1}
   indx_t3_3::Array{Int64,1}
+  sta_name::Array{String,1}
+  tel_name::Array{String,1}
+  sta_index::Array{Int64,1}
+  v2_sta_index::Array{Int64,2}
+  t3_sta_index::Array{Int64,2}
 end
 
 # Experimental version with target fitering for NPOI
@@ -81,6 +86,23 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
     targetid_filter = [targettables[i][:target_id] for i=1:length(targettables)];
   end
 
+  arraytables=OIFITS.select(tables,"OI_ARRAY")
+  array_ntables=length(arraytables)
+
+#get info from array tables_
+  station_name=Array{Array{String,1}}(undef, array_ntables)
+  telescope_name=Array{Array{String,1}}(undef, array_ntables);
+  station_index=Array{Array{Int64,1}}(undef, array_ntables);
+  v2_sta_index=Array{Array{Int64,2}}(undef, array_ntables);
+  t3_sta_index=Array{Array{Int64,3}}(undef, array_ntables);
+
+
+  for itable = 1:array_ntables
+      station_name[itable] = arraytables[itable][:sta_name]; # station_names
+      telescope_name[itable] = arraytables[itable][:tel_name]; # tel_names
+      station_index[itable] = arraytables[itable][:sta_index]; # station_indexes for matchin names to indexes in v2 and t3
+  end
+
 
   v2table = OIFITS.select(tables,"OI_VIS2");
   v2_ntables = length(v2table);
@@ -101,7 +123,8 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
   v2_v_old = Array{Array{Float64,1}}(undef,v2_ntables);
   v2_uv_old = Array{Array{Float64,2}}(undef,v2_ntables);
   v2_baseline_old = Array{Array{Float64,1}}(undef,v2_ntables);
-
+  v2_sta_index_old=Array{Array{Int64,2}}(undef, v2_ntables);
+  v2_station_index_old=Array{Array{Int64,2}}(undef, v2_ntables);
   for itable = 1:v2_ntables
     v2_targetid_filter = findall(sum([v2table[itable][:target_id].==targetid_filter[i] for i=1:length(targetid_filter)],dims=1)[1].>0);
     v2_old[itable] = v2table[itable][:vis2data][:,v2_targetid_filter]; # Visibility squared
@@ -110,6 +133,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
     v2_vcoord_old[itable] = v2table[itable][:vcoord][v2_targetid_filter]; #  v coordinate in uv plane
     v2_mjd_old[itable] = repeat(v2table[itable][:mjd][v2_targetid_filter]',
     outer=[size(v2_old[itable],1),1]); # Modified Julian Date (JD - 2400000.5)
+    v2_sta_index_old[itable]=v2table[itable][:sta_index][:,v2_targetid_filter]  #station index
     whichwav = findall(v2table[itable][:insname].==wavtableref);
     if (length(whichwav) != 1)
       error("Wave table confusion -- Missing table ?\n");
@@ -120,11 +144,13 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
     nv2_lam_old = length(v2_lam_old[itable][:,1]);
     v2_u_old[itable] = Float64[];
     v2_v_old[itable] = Float64[];
+    v2_station_index_old[itable]=vcat(Int64[]',Int64[]')
     for u = 1:length(v2_ucoord_old[itable])
       v2_u_old[itable] = vcat(v2_u_old[itable],
       v2_ucoord_old[itable][u]./v2_lam_old[itable][:,1]);
       v2_v_old[itable] = vcat(v2_v_old[itable],
       v2_vcoord_old[itable][u]./v2_lam_old[itable][:,1]);
+      v2_station_index_old[itable]=hcat(v2_station_index_old[itable],repeat(v2_sta_index_old[itable][:,u],outer=[1,8]))
     end
     v2_uv_old[itable] = hcat(vec(v2_u_old[itable]),vec(v2_v_old[itable]));
     v2_baseline_old[itable] = vec(sqrt.(v2_u_old[itable].^2 + v2_v_old[itable].^2));
@@ -154,7 +180,8 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
   t3_v3_old = Array{Array{Float64,1}}(undef,t3_ntables);
   t3_baseline_old = Array{Array{Float64,1}}(undef,t3_ntables);
   t3_maxbaseline_old = Array{Array{Float64,1}}(undef,t3_ntables);
-
+  t3_sta_index_old=Array{Array{Int64,2}}(undef, t3_ntables);
+  t3_station_index_old=Array{Array{Int64,2}}(undef, t3_ntables);
   for itable = 1:t3_ntables
     t3_targetid_filter = findall(sum([t3table[itable][:target_id].==targetid_filter[i] for i=1:length(targetid_filter)],dims=1)[1].>0);
     t3amp_old[itable] = t3table[itable][:t3amp][:,t3_targetid_filter];
@@ -169,6 +196,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
     t3_v3coord_old[itable] = -(t3_v1coord_old[itable] + t3_v2coord_old[itable]);
     t3_mjd_old[itable] = repeat(t3table[itable][:mjd][t3_targetid_filter]',
     outer=[size(t3amp_old[itable],1),1]); # Modified Julian Date (JD - 2400000.5)
+    t3_sta_index_old[itable]=t3table[itable][:sta_index][:,t3_targetid_filter]
     whichwav = findall(t3table[itable][:insname].==wavtableref);
     t3_lam_old[itable] = repeat(wavtable[whichwav[1]][:eff_wave],
     outer=[1,size(t3amp_old[itable],2)]); # spectral channels
@@ -183,6 +211,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
     t3_v2_old[itable] = Float64[];
     t3_u3_old[itable] = Float64[];
     t3_v3_old[itable] = Float64[];
+    t3_station_index_old[itable]=vcat(Int64[]',Int64[]',Int64[]')
     for u = 1:length(t3_u1coord_old[itable])
       t3_u1_old[itable] = vcat(t3_u1_old[itable],t3_u1coord_old[itable][u]./t3_lam_old[itable][:,1]);
       t3_v1_old[itable] = vcat(t3_v1_old[itable],t3_v1coord_old[itable][u]./t3_lam_old[itable][:,1]);
@@ -190,6 +219,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
       t3_v2_old[itable] = vcat(t3_v2_old[itable],t3_v2coord_old[itable][u]./t3_lam_old[itable][:,1]);
       t3_u3_old[itable] = vcat(t3_u3_old[itable],t3_u3coord_old[itable][u]./t3_lam_old[itable][:,1]);
       t3_v3_old[itable] = vcat(t3_v3_old[itable],t3_v3coord_old[itable][u]./t3_lam_old[itable][:,1]);
+      t3_station_index_old[itable]=hcat(t3_station_index_old[itable],repeat(t3_sta_index_old[itable][:,u],outer=[1,8]))
     end
 
     t3_baseline_old[itable] = vec((sqrt.(t3_u1_old[itable].^2 + t3_v1_old[itable].^2).*sqrt.(t3_u2_old[itable].^2 + t3_v2_old[itable].^2).*
@@ -207,6 +237,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
   v2_flag_all = Bool[];
   v2_uv_all = vcat(Float64[]',Float64[]');
   v2_baseline_all = Float64[];
+  v2_sta_index_all=vcat(Int64[]',Int64[]')
   t3amp_all = Float64[];
   t3amp_err_all = Float64[];
   t3phi_all = Float64[];
@@ -222,6 +253,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
   t3_u3_all = Float64[];
   t3_v3_all = Float64[];
   t3_uv_all = vcat(Float64[]',Float64[]');
+  t3_sta_index_all=vcat(Int64[]',Int64[]',Int64[]')
   t3_baseline_all = Float64[];
   t3_maxbaseline_all = Float64[];
 
@@ -234,6 +266,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
     v2_flag_all = vcat(v2_flag_all,vec(v2_flag_old[i]));
     v2_uv_all = hcat(v2_uv_all,v2_uv_old[i]'); # Must have in this form for Fourier transform
     v2_baseline_all = vcat(v2_baseline_all,vec(v2_baseline_old[i]));
+    v2_sta_index_all=hcat(v2_sta_index_all,v2_station_index_old[i])
   end
 
   for i = 1:t3_ntables
@@ -254,6 +287,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
     #t3_uv_all = hcat(t3_uv_all,t3_uv_old[i]'); # Must have in this form for Fourier transform
     t3_baseline_all = vcat(t3_baseline_all,vec(t3_baseline_old[i]));
     t3_maxbaseline_all = vcat(t3_maxbaseline_all,vec(t3_maxbaseline_old[i]));
+    t3_sta_index_all=hcat(t3_sta_index_all,t3_station_index_old[i])
   end
   t3_uv_all = hcat(vcat(t3_u1_all,t3_u2_all,t3_u3_all),vcat(t3_v1_all,t3_v2_all,t3_v3_all))';
 
@@ -331,6 +365,9 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
   indx_t3_1 = Array{Array{Int64,1}}(undef,nspecbin,ntimebin);
   indx_t3_2 = Array{Array{Int64,1}}(undef,nspecbin,ntimebin);
   indx_t3_3 = Array{Array{Int64,1}}(undef,nspecbin,ntimebin);
+  v2_station_index_new=fill((vcat(Int64[]',Int64[]')),nspecbin,ntimebin);
+  t3_station_index_new=fill((vcat(Int64[]',Int64[]',Int64[]')),nspecbin,ntimebin);
+
 
   iter_mjd = 0; iter_wav = 0;
   t3_uv_mjd = zeros(length(t3_mjd_all)*3);
@@ -421,6 +458,8 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
       v2_flag_new[ispecbin,itimebin] = vcat(v2_flag_new[ispecbin,itimebin],v2_flag_all[bin_v2]);
       v2_uv_new[ispecbin,itimebin] = hcat(v2_uv_new[ispecbin,itimebin],vcat(v2_uv_all[1,:][bin_v2]',v2_uv_all[2,:][bin_v2]'));
       v2_baseline_new[ispecbin,itimebin] = vcat(v2_baseline_new[ispecbin,itimebin],v2_baseline_all[bin_v2]);
+      v2_station_index_new[ispecbin,itimebin]=hcat(v2_station_index_new[ispecbin,itimebin],v2_sta_index_all[:,bin_v2]);
+
 
       t3amp_new[ispecbin,itimebin] = vcat(t3amp_new[ispecbin,itimebin],t3amp_all[bin_t3]);
       t3amp_err_new[ispecbin,itimebin] = vcat(t3amp_err_new[ispecbin,itimebin],t3amp_err_all[bin_t3]);
@@ -433,7 +472,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
       t3_uv_new[ispecbin,itimebin] = hcat(t3_uv_new[ispecbin,itimebin],vcat(t3_uv_all[1,:][bin_t3uv]',t3_uv_all[2,:][bin_t3uv]'));
       t3_baseline_new[ispecbin,itimebin] = vcat(t3_baseline_new[ispecbin,itimebin],t3_baseline_all[bin_t3]);
       t3_maxbaseline_new[ispecbin,itimebin] = vcat(t3_maxbaseline_new[ispecbin,itimebin],t3_maxbaseline_all[bin_t3]);
-
+      t3_station_index_new[ispecbin,itimebin]=hcat(t3_station_index_new[ispecbin,itimebin],t3_sta_index_all[:,bin_t3]);
 
       mean_mjd[ispecbin,itimebin] = mean(v2_mjd_new[ispecbin,itimebin]);
       full_uv[ispecbin,itimebin] = hcat(v2_uv_new[ispecbin,itimebin],t3_uv_new[ispecbin,itimebin]);
@@ -460,7 +499,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
       t3amp_err_new[ispecbin,itimebin], t3phi_new[ispecbin,itimebin], t3phi_err_new[ispecbin,itimebin], t3_baseline_new[ispecbin,itimebin],t3_maxbaseline_new[ispecbin,itimebin],
       t3_mjd_new[ispecbin,itimebin], t3_lam_new[ispecbin,itimebin], t3_dlam_new[ispecbin,itimebin], t3_flag_new[ispecbin,itimebin], full_uv[ispecbin,itimebin],
       0, 0, nv2[ispecbin,itimebin], nt3amp[ispecbin,itimebin], nt3phi[ispecbin,itimebin], nuv[ispecbin,itimebin], indx_v2[ispecbin,itimebin],
-      indx_t3_1[ispecbin,itimebin], indx_t3_2[ispecbin,itimebin], indx_t3_3[ispecbin,itimebin]);
+      indx_t3_1[ispecbin,itimebin], indx_t3_2[ispecbin,itimebin], indx_t3_3[ispecbin,itimebin],station_name[1],telescope_name[1],station_index[:][1],v2_station_index_new[ispecbin,itimebin],t3_station_index_new[ispecbin,itimebin]);
 
       if (filter_bad_data==true)
         # Filter OBVIOUSLY bad V2 data
@@ -472,6 +511,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
 
         good_uv_v2 = OIdataArr[ispecbin,itimebin].indx_v2[v2_good]
 
+
         OIdataArr[ispecbin,itimebin].v2 = OIdataArr[ispecbin,itimebin].v2[v2_good]
         OIdataArr[ispecbin,itimebin].v2_err = OIdataArr[ispecbin,itimebin].v2_err[v2_good]
         OIdataArr[ispecbin,itimebin].v2_baseline = OIdataArr[ispecbin,itimebin].v2_baseline[v2_good]
@@ -480,7 +520,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
         OIdataArr[ispecbin,itimebin].v2_lam  = OIdataArr[ispecbin,itimebin].v2_lam[v2_good]
         OIdataArr[ispecbin,itimebin].v2_dlam = OIdataArr[ispecbin,itimebin].v2_dlam[v2_good]
         OIdataArr[ispecbin,itimebin].v2_flag = OIdataArr[ispecbin,itimebin].v2_flag[v2_good]
-
+        OIdataArr[ispecbin,itimebin].v2_sta_index = OIdataArr[ispecbin,itimebin].v2_sta_index[:,v2_good]
         # TODO: filter T3.t3amp
 
         t3amp_good =  (.!isnan.(OIdataArr[ispecbin,itimebin].t3amp )) .& (.!isnan.(OIdataArr[ispecbin,itimebin].t3amp_err )) .& (OIdataArr[ispecbin,itimebin].t3amp_err.>0.0)
@@ -510,7 +550,7 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
         OIdataArr[ispecbin,itimebin].t3_lam  = OIdataArr[ispecbin,itimebin].t3_lam[t3_good]
         OIdataArr[ispecbin,itimebin].t3_dlam = OIdataArr[ispecbin,itimebin].t3_dlam[t3_good]
         OIdataArr[ispecbin,itimebin].t3_flag = OIdataArr[ispecbin,itimebin].t3_flag[t3_good]
-
+        OIdataArr[ispecbin,itimebin].t3_sta_index = OIdataArr[ispecbin,itimebin].t3_sta_index[:,t3_good]
         # uv points filtering
         uv_select  = Array{Bool}(undef, size(OIdataArr[ispecbin,itimebin].uv,2))
         uv_select[:]  .= false;
@@ -529,9 +569,6 @@ function readoifits(oifitsfile; targetname ="", spectralbin=[[]], temporalbin=[[
     end
     iter_wav = 0;
   end
-
-
-
   return OIdataArr;
 end
 
