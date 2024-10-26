@@ -1,85 +1,60 @@
-function hours_to_hms(hours)
+using AstroTime
+
+function hours_to_date(obsdate, hours)
     h= floor.(hours)
     min = div.((hours-h)*3600.0, 60.0)
     sec = rem.((hours-h)*3600.0, 60.0)
-    return hcat(h, min, sec)
+    isec =  floor.(sec)
+    msec = round.((sec-floor.(sec))*1000)
+    return Dates.DateTime.(Dates.year(obsdate),Dates.month(obsdate),Dates.day(obsdate),h,min,isec,msec)
 end
 
 
 
-function hour_angle_calc(dates::Union{Array{Any,2},Array{Float64,2}},longitude::Float64, ra::Float64;dst="no",ldir="E",timezone="UTC")
+function hour_angle_calc(dates::Union{DateTime, Array{DateTime, 1}}, longitude::Float64, ra::Float64;ldir="E")
+return hour_angle_calc(from_utc.(dates), longitude, ra, ldir=ldir)
+end
+
+function hour_angle_calc(dates, longitude::Float64, ra::Float64;ldir="E")
 
 """
 This function calculates and returns the hour angle for the desired object given a RA, time, and longitude
-of observations.  The program assumes UTC but changing the timezone argument to "local" will adjust the
-input times accordingly.
-
-Arguments:
-Manual Inputs:
-* date [2018  3 5 21 13 56.7; 2018 3 5 21 14 12.7] day,month,year,hour,min,sec: Correction to UTC is done within code if necessary/dictated.
-* longitude: degree (in decimal form) value of the longitudinal location of the telescope.
-* ra: [h,m,s] array of the right ascension of the desired object.
-
-Optional Inputs:
-* dst: ["yes","no"] whether daylight savings time needs to be accounted for.
-* ldir: ["W","E"] defines the positive direction for change in longitude (should be kept to W for best applicability).
-* timezone: ["UTC","local"] states whether the time inputs are UTC or not.  If not the code will adjust the times as needed with the given longitude.
-
-Accuracy:
-* With preliminary testing the LST returned is accurate to within a few minutes when compared with other calculators (MORE TESTING AND QUANTITATIVE ERROR NEEDS TO BE ESTABLISHED).
+of observations. This function assumes UTC.
 """
 
-
+alpha= 1
 if ldir == "W"
     alpha = -1.
 elseif ldir == "E"
     alpha = 1.
 end
 
-years=Int.(dates[:,1])
-months=Int.(dates[:,2])
-days = Int.(dates[:,3])
-hours=Int.(dates[:,4])
-minutes=Int.(dates[:,5])
-seconds=Float64.(dates[:,6])
-
-h_ad = alpha*longitude/15 #Measures the hours offset due to longitude
-
-
-if timezone != "UTC"
-    if dst=="no"
-        hours .-= h_ad
-    elseif dst=="yes"
-        h_ad += 1
-        hours .-= h_ad
-    end
-    wrap_hours_over = findall(hours.>24)
-    hours[wrap_hours_over] .-= 24
-    days[wrap_hours_over] .+= 1
-
-    wrap_hours_under = findall(hours.<0)
-    hours[wrap_hours_under] +=24
-    days[wrap_hours_under] -= 1
+if typeof(dates) == Epoch{InternationalAtomicTime, Float64} # transform single epochs into Array
+    dates = [dates]
 end
+
+Y= year.(dates)
+M= month.(dates)
+D = day.(dates)
+H= hour.(dates) # CHARA UTC offset
+MIN= minute.(dates)
+SEC= second.(dates)+millisecond.(dates)/1000
+
+h_ad = alpha*longitude/15 #longitude in degrees, Measures the hours offset due to longitude
 
 #Below: the code calculates first the Julian Date given the input time and then determines the GMST based
 #on this JD.  This is then converted to LST and finally to Local Hour Angle (LHA or HA).  The final result
 #is in terms of hours for both LST and HA.
-jdn = floor.((1461*(years .+4800 .+(months.-14)/12))/4+(367*(months .-2-12*((months.-14)/12)))/12-(3*((years .+4900 +(months.-14)/12)/100))/4 .+days.-32075)
-jdn = jdn + ((hours.-12)/24)+(minutes/1440)+(seconds/86400)
+jdn = floor.((1461*(Y .+4800 .+(M.-14)/12))/4+(367*(M .-2-12*((M.-14)/12)))/12-(3*((Y .+4900 +(M.-14)/12)/100))/4 .+D.-32075)
+jdn = jdn + ((H.-12)/24)+(MIN/1440)+(SEC/86400)
 jd0 = jdn .-2451545.0
-#gmst = 6.697374558 + (0.06570982441908*(jd0-(hour/24.))) + (1.00273790935*hour) + 0.000026*(jd0/36525)^2
 t = jd0/36525.0
-H = 24110.54841 .+ 8640184.812866*t + 0.093104*t.^2 - 6.2E-6*t.^3
-w = 1.00273790935 .+ 5.9e-11*t
-tt = hours*3600 + minutes*60 + seconds
-gmst = H + w.*tt #seconds
+gmst = 24110.54841 .+ 8640184.812866*t + 0.093104*t.^2 - 6.2E-6*t.^3 + (1.00273790935 .+ 5.9e-11*t).*(H*3600 + MIN*60 + SEC) #seconds
 gmst = gmst/3600 #hours
 
 gmst_over = findall(gmst.>24)
 gmst[gmst_over] -= (24*floor.(gmst[gmst_over]/24))
 lst = gmst .+ h_ad
-
 lst_under = findall(lst.<0)
 lst_over = findall(lst.>24)
 lst[lst_under] .+= 24
@@ -89,125 +64,34 @@ hour_angle[findall(hour_angle.<-12)] .+= 24; # had to add this, normal ???? FB
 return lst,hour_angle
 end
 
-
-function mjd_to_utc(mjd)
+function mjd_to_utdate(mjd::Float64) # used in interactive plots in oiplot.jl to return utc of points TODO: replace this
     """
     This function calculates and returns the UTC given a specific mjd.  It is a julia implementation of the codes  by Peter J. Acklam found
         on http://www.radiativetransfer.org/misc/atmlabdoc/atmlab/time/mjd2date.html and linked pages, except for the error handling (for now)
     """
     jd = mjd + 2400000.5;
     #get year month and days
-    intjd = floor(jd+0.5);
+    intjd = floor(Int64,jd+0.5);
     a = intjd+32044;
-    b = floor((4 * a + 3) / 146097);
-    c = a - floor((b * 146097) / 4);
-    d = floor((4 * c + 3) / 1461);
-    e = c - floor((1461 * d) / 4);
-    m = floor((5 * e + 2) / 153);
-    day   = e - floor((153 * m + 2) / 5) + 1;
-    month = m + 3 - 12 * floor(m / 10);
-    year  = b * 100 + d - 4800 + floor(m / 10);
+    b = floor(Int64, (4 * a + 3) / 146097);
+    c = a - floor(Int64, (b * 146097) / 4);
+    d = floor(Int64,(4 * c + 3) / 1461);
+    e = c - floor(Int64,(1461 * d) / 4);
+    m = floor(Int64, (5 * e + 2) / 153);
+    day   = e - floor(Int64, (153 * m + 2) / 5) + 1;
+    month = m + 3 - 12 * floor(Int64, m / 10);
+    year  = b * 100 + d - 4800 + floor(Int64, m / 10);
     #get hour min seconds
-    fracmjd = mjd-floor(mjd); #days;
+    fracmjd = mjd-floor(Int64, mjd); #days;
     secs = 86400*fracmjd;
-    hour = trunc(secs/3600);
-    secs= secs-3600*hour;  #remove hour
-    mins = trunc(secs/60); #minutes
-    secs = secs -60*mins; #seconds
-    return secs,mins,hour,day,month,year
+    hour = trunc(Int64,secs/3600);
+    secs= secs - 3600*hour;  #remove hour
+    mins = Int(trunc(secs/60)); #minutes
+    secs = secs - 60*mins; #seconds
+    msecs = round(Int64,1000*(secs - floor(Int64, secs)));
+    secs = floor(Int64, secs);
+    return Dates.DateTime(year, month, day, hour, mins, secs, msecs)
 end
-
-# function dates_to_jd(dates::Union{Array{Any,2},Array{Float64,2}})
-#     """
-#     This function calculates and returns the hour angle for the desired object given a RA, time, and longitude
-#     of observations.  The program assumes UTC but changing the timezone argument to "local" will adjust the
-#     input times accordingly.
-#
-#     Arguments:
-#     Manual Inputs:
-#     * date [2018  3 5 21 13 56.7; 2018 3 5 21 14 12.7] day,month,year,hour,min,sec: Correction to UTC is done within code if necessary/dictated.
-#     * longitude: degree (in decimal form) value of the longitudinal location of the telescope.
-#     * ra: [h,m,s] array of the right ascension of the desired object.
-#
-#     Optional Inputs:
-#     * dst: ["yes","no"] whether daylight savings time needs to be accounted for.
-#     * ldir: ["W","E"] defines the positive direction for change in longitude (should be kept to W for best applicability).
-#     * timezone: ["UTC","local"] states whether the time inputs are UTC or not.  If not the code will adjust the times as needed with the given longitude.
-#
-#     Accuracy:
-#     * With preliminary testing the LST returned is accurate to within a few minutes when compared with other calculators (MORE TESTING AND QUANTITATIVE ERROR NEEDS TO BE ESTABLISHED).
-#     """
-#     if ldir == "W"
-#         alpha = -1.
-#     elseif ldir == "E"
-#         alpha = 1.
-#     end
-#     years=Int.(dates[:,1])
-#     months=Int.(dates[:,2])
-#     days = Int.(dates[:,3])
-#     hours=Int.(dates[:,4])
-#     minutes=Int.(dates[:,5])
-#     seconds=Float64.(dates[:,6])
-#     h_ad = alpha*longitude/15 #Measures the hours offset due to longitude
-#     if timezone != "UTC"
-#         if dst=="no"
-#             hours .-= h_ad
-#         elseif dst=="yes"
-#             h_ad += 1
-#             hours .-= h_ad
-#         end
-#         wrap_hours_over = findall(hours.>24)
-#         hours[wrap_hours_over] .-= 24
-#         days[wrap_hours_over] .+= 1
-#
-#         wrap_hours_under = findall(hours.<0)
-#         hours[wrap_hours_under] +=24
-#         days[wrap_hours_under] -= 1
-#     end
-#
-#     #Below: the code calculates first the Julian Date given the input time and then determines the GMST based
-#     #on this JD.  This is then converted to LST and finally to Local Hour Angle (LHA or HA).  The final result
-#     #is in terms of hours for both LST and HA.
-#     jdn = floor.((1461*(years .+4800 .+(months.-14)/12))/4+(367*(months .-2-12*((months.-14)/12)))/12-(3*((years .+4900 +(months.-14)/12)/100))/4 .+days.-32075)
-#     jdn = jdn + ((hours.-12)/24)+(minutes/1440)+(seconds/86400)
-#     jd0 = jdn .-2451545.0
-#     return jd0
-# end
-
-
-# function jd_to_hour_angle(jd::Array{Float64,1},tel_longitude::Float64, obj_ra::Float64;dst="no",ldir="W",timezone="UTC")
-#
-# """
-# This function calculates and returns the hour angle for the desired object given the object RA, the JD time, and longitude
-# of observations.
-# Arguments:
-# Manual Inputs:
-# * longitude: degree (in decimal form) value of the longitudinal location of the telescope.
-# * ra: [h,m,s] array of the right ascension of the desired object.
-# Accuracy:
-# * With preliminary testing the LST returned is accurate to within a few minutes when compared with other calculators (MORE TESTING AND QUANTITATIVE ERROR NEEDS TO BE ESTABLISHED).
-# """
-#
-# t = jd/36525.0 # TODO check that correct jd here (= rjd - 51545.0) ???
-# # Greenwich Mean Sidereal Time at Oh UT (in seconds)
-# H = 24110.54841 .+ 8640184.812866*t + 0.093104*t.^2 - 6.2e-6*t.^3
-# w = 1.00273790935 .+ 5.9e-11*t  # what's this ???
-# tt = hours*3600 + minutes*60 + seconds # what's this ???
-# gmst = H + w.*tt #seconds
-# # Greenwich Mean Sidereal Time in hours
-# gmst = gmst/3600 #hours
-# gmst_over = findall(gmst.>24)
-# gmst[gmst_over] -= (24*floor.(gmst[gmst_over]/24))
-# # Local Mean Sidereal Time in hours at 0h UT (longitude correction)
-# lst = gmst .+ longitude/15
-# lst_under = findall(lst.<0)
-# lst_over = findall(lst.>24)
-# lst[lst_under] .+= 24
-# lst[lst_over] -= (24*floor.(lst[lst_over]/24))
-# # HA of star at 0h UT on RJD
-# hour_angle = lst .-obj_ra
-# return lst, hour_angle
-# end
 
 
 function opd_limits(base, alt, az)
@@ -226,24 +110,24 @@ function alt_az(dec_deg,lat_deg, ha_hours) #returns alt, az in degrees
     return alt*180/pi, mod.(az*180/pi.+360, 360)
 end
 
-function geometric_delay(l,h,δ,baselines)
+function geometric_delay(lat_deg,h_deg,δ_deg,baselines)
+    l = lat_deg/180*pi
+    h = h_deg'*pi/12
+    δ = δ_deg/180*pi
     Δgeo =  -(sin(l)*cos(δ)*cos.(h).-cos(l)*sin(δ) ).*baselines[1,:]-(cos(δ)*sin.(h)) .* baselines[2,:]+ (cos(l)*cos(δ)*cos.(h) .+ sin(l)*sin(δ)).*baselines[3,:]
     return Δgeo
 end
-
-
-#function cart_delay(baselines)
-#    Δcarts = -0.5*(geometric_delay(l,h,δ,baselines) - airpath_delay(baselines) + pop_delay(baselines))
-#    return Δcarts
-#end
-
 
 function dayofyear(day, month, year)
 N = floor(275 * month / 9) - floor((month + 9) / 12) * (1 + floor((year - 4 * floor(year / 4) + 2) / 3)) + day - 30
 return N
 end
 
-function sunrise_sunset(day, month, year, latitude, longitude;zenith=102.0)
+function sunrise_sunset(obsdate::DateTime, latitude, longitude;zenith=102.0)
+    return sunrise_sunset(from_utc(obsdate), latitude, longitude,zenith=zenith)
+end
+
+function sunrise_sunset(obsdate, latitude, longitude;zenith=102.0)
 #Source:
 #	Almanac for Computers, 1990
 #	published by Nautical Almanac Office
@@ -261,10 +145,14 @@ function sunrise_sunset(day, month, year, latitude, longitude;zenith=102.0)
 
 #	NOTE: longitude is positive for East and negative for West
 
+Y   = year.(obsdate)
+M  = month.(obsdate)
+D    = day.(obsdate)
+
 dtr=pi/180.
 rtd = 180.0/pi
 #1. first calculate the day of the year
-N = dayofyear(day, month, year)
+N = dayofyear(D, M, Y)
 
 #2. convert the longitude to hour value and calculate an approximate time
 lngHour = longitude / 15
@@ -327,4 +215,97 @@ UT_set = T_set - lngHour
 #localT_rise = UT_rise + localOffse
 #localT_rise = UT_rise + localOffse
 return UT_rise, UT_set
+end
+
+
+# Aspro-type plot
+function gantt_onenight(targetname,obsdate, lst, lst_midnight, az, alt, good_alt, good_delay)
+# Gantt plot
+fig = figure(figsize=(20,10))
+ax = fig.add_subplot(111)
+ax.xaxis.set_major_locator(matplotlib.dates.HourLocator(interval=1))
+ax.xaxis.set_minor_locator(matplotlib.dates.MinuteLocator(interval=15))
+ax.xaxis.set_major_formatter(matplotlib.dates.DateFormatter("%H:%M"))
+offset = 4# 0 if we want to see delay during the day, 4 to keep mostly dark times
+xlim(hours_to_date(obsdate, lst_midnight[1]-12+offset), hours_to_date(obsdate+Dates.Day(1), lst_midnight[1]-12-offset) ); xlabel("LST")
+ylim(0, 10);
+df = DateFormat("h:m");
+title(string("Observing night: ", Date(obsdate), " - ", Date(obsdate+Dates.Day(1)), " -- Target: ", targetname))
+fig.autofmt_xdate(bottom=0.2,rotation=30,ha="right"); ax.xaxis_date(); grid()
+plt.axvline(x=hours_to_date(obsdate, lst_midnight[1]), color=:red) # nextday transition # add label?
+start_date = hours_to_date(obsdate,lst[1]+1.5)
+end_date   = hours_to_date(obsdate, lst[end]-1.5 )
+ax.barh(5, end_date - start_date, left=start_date, height=10, align="center", color=:lightgray, alpha = 0.75)
+start_date = hours_to_date(obsdate,lst[1]+2)
+end_date   = hours_to_date(obsdate, lst[end]-2 )
+ax.barh(5, end_date - start_date, left=start_date, height=10, align="center", color=:lightgray, alpha = 0.75)
+start_date = hours_to_date(obsdate,lst[1]+3)
+end_date   = hours_to_date(obsdate, lst[end]-3 )
+ax.barh(5, end_date - start_date, left=start_date, height=10, align="center", color=:gray, alpha = 0.75)
+start_date = hours_to_date(obsdate,lst[good_alt[1]])
+end_date   = hours_to_date(obsdate, lst[good_alt[end]])
+ax.barh(5, end_date - start_date, left=start_date, height=1.5, align="center", color=:orange, label="Altitude",zorder=3)
+start_date = hours_to_date(obsdate,lst[good_delay[1]])
+end_date   = hours_to_date(obsdate, lst[good_delay[end]])
+ax.barh(2, end_date - start_date, left=start_date, height=2, align="center", color=:blue, label="In Delay", zorder=3)
+text(start_date, 2, Dates.format(start_date, dateformat"H:M") , rotation=90,va="center", ha="right", color=:black)
+text(end_date, 2, Dates.format(end_date, dateformat"H:M"), rotation=90,va="center",ha="left",color=:black)
+text(start_date, 3.3, round(Int64,az[good_delay[1]]),va="top", ha="center", color=:black) # add label to show it's az ?
+text(start_date, 0.7, round(Int64,alt[good_delay[1]]),va="bottom",ha="center",color=:black)
+text(end_date, 3.3, round(Int64,az[good_delay[end]]),va="top", ha="right", color=:black)
+text(end_date, 0.7, round(Int64,alt[good_delay[end]]),va="bottom",ha="right",color=:black)
+yticks([2],[targetname])
+legend()
+tight_layout()
+end
+
+function get_baselines(facility; config = []) # similar to get_v2_baselines in simulate.jl, but here for planning
+    # determine baselines and make necessary arrays
+    N = facility.ntel[1]
+    station_xyz= hcat([facility.sta_xyz[(i*3-2):i*3] for i=1:N]...)'
+
+    # Use all scopes by default, without a specific reference cart
+    if config == []
+        config = ones(N)
+    end
+
+    # Example for CHARA, the facility.sta_names ["S1"  "S2"  "E1"  "E2"  "W1"  "W2"]
+    # config = [1, 1, 0, 1, 1, 2]# telescopes to use = 1, to not use = 0, reference = 2
+    iref  = findall(config .==2 )
+    use_ref = ( length(iref) == 1 ) # we discard several refs as a mistake
+    itels =  findall(config .== 1 )
+
+    list_one = []
+    if use_ref
+        list_one = iref
+    else
+        list_one = itels
+    end
+    list_two = itels
+
+    # Note: this should be done with push!
+    nbaselines = Int64(N*(N-1)/2);
+    baseline_xyz = Array{Float64}(undef,3,nbaselines);
+    baseline_stations  = Array{Int64}(undef,2,nbaselines);
+    ind = 1
+    for i in list_one
+      for j in list_two
+          if i!=j
+            baseline_xyz[:,ind] .= station_xyz[j,:]-station_xyz[i,:];
+            baseline_stations[:,ind] = [i,j];
+            ind += 1
+            end
+        end
+    end
+
+    nbaselines = ind-1;
+    baseline_xyz = baseline_xyz[:,1:nbaselines]
+    baseline_stations = baseline_stations[:,1:nbaselines];
+
+    baseline_names = Array{String}(undef,nbaselines);
+    for i=1:nbaselines
+        baseline_names[i]=string(facility.sta_names[baseline_stations[1,i]],"-",facility.sta_names[baseline_stations[2,i]])
+    end
+
+    return nbaselines, baseline_xyz, baseline_stations, baseline_names
 end
